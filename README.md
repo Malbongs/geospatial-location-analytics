@@ -1,6 +1,6 @@
 # 공간분석 입지 인텔리전스 엔진
 
-**Nationwide demand–supply location analysis for retail siting — built with spatial statistics, from data pipeline to scoring engine.**
+> 전국 단위 수요–공급 입지분석 — 데이터 파이프라인부터 점수화 엔진까지 공간통계로 구축했습니다.
 
 ![Python](https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white)
 ![pandas](https://img.shields.io/badge/pandas-150458?logo=pandas&logoColor=white)
@@ -13,142 +13,142 @@
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy%202.0-D71F00)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 
-> Code-private project. This document presents methodology, scale, and role only — no code or screenshots.
+> 코드 비공개 프로젝트입니다. 본 문서는 방법론·규모·역할만 소개하며, 코드나 스크린샷은 담지 않습니다.
 
-## Overview
+## 개요
 
-I designed and built — solo — a spatial analytics engine that scores the viability of **retail store locations** across an entire country at the administrative-district level. Given any of **3,523 districts across 250 municipalities**, it estimates how much unmet consumer demand a new store could realistically capture, by modeling demand, competition, accessibility, and cost-efficiency as distinct spatial forces rather than lumping them into a single heuristic.
+혼자서, 전국을 행정동 단위로 훑어 **리테일 점포 입지**의 사업성을 점수화하는 공간분석 엔진을 설계하고 구축했습니다. **250개 시군구, 3,523개 행정동** 어디에 대해서든, 새 점포가 현실적으로 확보할 수 있는 미충족 수요가 얼마인지를 — 수요·경쟁·접근성·비용효율을 각각 별개의 공간적 힘으로 모델링해 — 추정합니다.
 
-The core idea is that "a good location" is not one number you can eyeball. It is the interaction of *where people are*, *where existing supply already is*, *how far people will actually travel*, and *what it costs to operate there*. Each of those is a measurable spatial quantity, and each has an established method in the geography and spatial-epidemiology literature. This engine implements those methods correctly — 2SFCA / E2SFCA for accessibility, the Huff probabilistic choice model for demand allocation — rather than approximating them.
+핵심 발상은 "좋은 입지"는 눈대중으로 찍는 하나의 숫자가 아니라는 것입니다. 그것은 *사람이 어디 있는가*, *기존 공급이 어디 있는가*, *사람들이 실제로 얼마나 멀리 움직이는가*, *그곳에서 운영하는 비용이 얼마인가* 의 상호작용입니다. 각각은 측정 가능한 공간량이고, 각각은 지리학·공간역학 문헌에 확립된 방법이 있습니다. 이 엔진은 그 방법들을 근사치로 때우지 않고 — 접근성은 2SFCA / E2SFCA, 수요 배분은 Huff 확률선택모형으로 — 정확히 구현했습니다.
 
-The whole thing is roughly **12,353 lines of Python across 61 files**, fed by **19 heterogeneous public-data ETL connectors** normalized onto a single nationwide spatial grid.
+전체 규모는 **61개 파일에 걸친 약 12,353줄의 파이썬**이며, **19개의 이질적인 공공데이터 ETL 커넥터**가 이를 하나의 전국 공간 격자로 정규화해 공급합니다.
 
-## Methodology
+## 방법론
 
-The engine produces a composite **0–100 location score** from four axes, then layers six auxiliary indicators on top. The four axes are combined with **profile-specific weights**, and the weights themselves are *learned* rather than guessed (see Validation).
+엔진은 네 개의 축으로 **0–100 종합 입지점수**를 산출한 뒤, 그 위에 6개 보조지표를 얹습니다. 네 축은 **프로파일별 가중치**로 결합되며, 가중치 자체를 감이 아니라 *학습*으로 정합니다 (검증 섹션 참조).
 
-### The Four Axes
+### 네 개의 축
 
-| Axis | Meaning | Drives |
+| 축 | 의미 | 무엇을 좌우하는가 |
 |------|---------|--------|
-| **D — Demand** | Spatial consumer demand potential in the catchment | How many customers exist |
-| **C — Competitive Opportunity** | Gap between demand and existing supply | Whether the market is saturated or open |
-| **A — Accessibility** | Spatially-decayed reachability of supply from demand | How easily people can actually get there |
-| **R — Cost-efficiency** | Return relative to operating cost | Whether the economics work |
+| **D — 수요(Demand)** | 상권 내 공간적 소비 수요 잠재력 | 고객이 얼마나 있는가 |
+| **C — 경쟁기회(Competition)** | 수요와 기존 공급 사이의 빈틈 | 시장이 포화인가 열려있는가 |
+| **A — 접근성(Access)** | 수요에서 공급까지의 거리감쇠 도달성 | 사람들이 실제로 얼마나 쉽게 가는가 |
+| **R — 비용효율(Ratio)** | 운영 비용 대비 기대 성과 | 경제성이 성립하는가 |
 
-Composite score = weighted aggregation of D, C, A, R, normalized to 0–100.
+종합점수 = D·C·A·R의 가중 종합을 0–100으로 정규화.
 
-### Accessibility: 2SFCA → E2SFCA
+### 접근성: 2SFCA → E2SFCA
 
-Accessibility is computed with the **Two-Step Floating Catchment Area (2SFCA)** method and its enhanced variant **E2SFCA** (Luo & Qi, 2009).
+접근성은 **2단계 부동도달권(2SFCA)** 기법과 그 개선판 **E2SFCA**(Luo & Qi, 2009)로 계산합니다.
 
-**Step 1 — supply-to-demand ratio.** For each supply location *j*, sum the demand of every population location *k* within the catchment:
+**1단계 — 공급 대 수요 비율.** 각 공급지 *j*에 대해, 도달권 내 모든 인구지 *k*의 수요를 합해 공급-수요 비율을 만듭니다:
 
 ```
 R_j = S_j / Σ_k ( P_k · W_kj )
 ```
 
-**Step 2 — accessibility at each demand point.** For each demand location *i*, sum the ratios of all supply within its catchment:
+**2단계 — 각 수요지의 접근성.** 각 수요지 *i*에 대해, 도달권 내 모든 공급의 비율을 합합니다:
 
 ```
 A_i = Σ_j ( R_j · W_ij )
 ```
 
-The **enhanced** step in E2SFCA is the weighting function `W`. Instead of a hard binary catchment, I apply a **Gaussian distance-decay kernel** so nearby supply counts far more than supply at the edge:
+E2SFCA의 **개선 지점**은 가중함수 `W`입니다. 이분법적 도달권 대신 **가우시안 거리감쇠 커널**을 적용해, 가까운 공급이 도달권 가장자리의 공급보다 훨씬 크게 반영되도록 했습니다:
 
 ```
-G(d) = exp( −d² / (2·σ²) ),   σ = 4 km,   hard cutoff at 15 km
+G(d) = exp( −d² / (2·σ²) ),   σ = 4km,   컷오프 15km
 ```
 
-This gives a distance-sensitive accessibility surface rather than a step function that treats a store 1 km away the same as one 14 km away.
+이로써 1km 거리의 점포와 14km 거리의 점포를 동일하게 취급하는 계단 함수가 아니라, 거리에 민감한 접근성 표면이 만들어집니다.
 
-### Demand Allocation: Huff Probabilistic Choice Model
+### 수요 배분: Huff 확률선택모형
 
-Raw demand has to be *allocated* — a customer surrounded by several options doesn't send all their spend to the nearest one. I use the **Huff model**, the standard spatial-interaction gravity model for retail patronage:
+원시 수요는 *배분*되어야 합니다 — 여러 선택지에 둘러싸인 고객이 가장 가까운 한 곳에 소비를 다 몰지 않기 때문입니다. 리테일 선택의 표준 공간상호작용 중력모형인 **Huff 모형**을 사용합니다:
 
 ```
 P(i → j) = ( A_j / D_ij^β ) / Σ_k ( A_k / D_ik^β ),   β = 2.0
 ```
 
-Summing each destination's captured probability-mass over all origins yields **expected demand** per location.
+각 목적지가 확보한 확률질량을 모든 출발지에 대해 합하면 입지별 **기대수요**가 나옵니다.
 
-### Competitive Opportunity and Unmet Demand
+### 경쟁기회와 미충족수요
 
 ```
-Unmet demand = Demand × Competitive opportunity
+미충족수요 = 수요 × 경쟁기회
 ```
 
-A district scores high only when it has *both* real demand *and* room for that demand to be served.
+수요가 실재하고 *동시에* 그 수요를 채울 여지가 있는 곳만 높은 점수를 받습니다.
 
-### Auxiliary Indicators (6)
+### 보조지표 (6종)
 
-1. **Market vitality** — net business formation (openings minus closures) as a momentum signal.
-2. **Closure risk** — local churn/failure pressure.
-3. **Commercial-district typology** — **K-means clustering** into archetypes, cluster count validated by **silhouette score**.
-4. **Specialized demand** — demand tilt for particular segments.
-5. **Expected market size** — projected addressable market volume.
-6. Ranking diagnostics via **Spearman rank correlation**, implemented directly in NumPy.
+1. **시장활력** — 순 창업(개업−폐업)을 모멘텀 신호로.
+2. **폐업리스크** — 지역 이탈/폐업 압력.
+3. **상권유형** — **K-means 클러스터링**으로 상권 원형을 분류, 군집 수는 **실루엣 점수**로 검증.
+4. **특화수요** — 특정 세그먼트로의 수요 편향.
+5. **기대 시장규모** — 추정 유효시장 규모.
+6. **NumPy로 직접 구현한 Spearman 순위상관** 기반 랭킹 진단.
 
-## Data Pipeline
+## 데이터 파이프라인
 
-Nineteen **public-data ETL connectors** pull from heterogeneous government OpenAPIs, each with its own schema, coordinate convention, key format, and update cadence.
+19개의 **공공데이터 ETL 커넥터**가 서로 다른 스키마·좌표계·키 형식·갱신주기를 가진 정부 OpenAPI들에서 데이터를 끌어옵니다.
 
-1. **Extract** — 19 connectors against public OpenAPIs, with per-source retry, rate-limit handling, and pagination.
-2. **Normalize** — reconcile every source onto a single administrative-district key space (250 municipalities, 3,523 districts).
-3. **Spatial join** — reproject to a common CRS (**pyproj**), then join geometries (**GeoPandas / Shapely**) onto district boundaries.
-4. **Load** — persist to **PostGIS** via **SQLAlchemy 2.0 + GeoAlchemy2**, keeping geometry first-class.
-5. **Compute** — run the scoring engine over the unified nationwide table.
+1. **추출** — 19개 커넥터로 공공 OpenAPI 수집, 소스별 재시도·레이트리밋·페이징 처리.
+2. **정규화** — 모든 소스를 하나의 행정동 키 공간(250 시군구, 3,523 행정동)으로 일치.
+3. **공간조인** — 공통 좌표계(**pyproj**)로 재투영 후, 지오메트리(**GeoPandas / Shapely**)를 행정동 경계에 조인.
+4. **적재** — **PostGIS**에 **SQLAlchemy 2.0 + GeoAlchemy2**로 저장, 지오메트리를 일급 시민으로 유지.
+5. **계산** — 통합된 전국 테이블 위에서 점수화 엔진 실행.
 
-The hard part isn't any single source — it's making 19 sources with nothing in common agree on *what district a thing is in* and *what that thing means*, across the whole country.
+어려운 건 어느 한 소스가 아니라 — 공통점이 없는 19개 소스가 *어떤 것이 어느 행정동에 속하는지*, *그것이 무엇을 의미하는지*를 전국 규모로 합의하게 만드는 일입니다.
 
-## Tech Stack
+## 기술 스택
 
-| Layer | Tools |
+| 계층 | 도구 |
 |-------|-------|
-| **Core numerics** | Python, pandas, NumPy |
-| **Geospatial** | GeoPandas, Shapely, pyproj |
-| **Machine learning** | scikit-learn — StandardScaler, KMeans, silhouette; Spearman hand-implemented in NumPy |
-| **Spatial database** | PostGIS |
+| **수치 코어** | Python, pandas, NumPy |
+| **지오스페이셜** | GeoPandas, Shapely, pyproj |
+| **머신러닝** | scikit-learn — StandardScaler, KMeans, 실루엣; Spearman은 NumPy로 직접 구현 |
+| **공간 DB** | PostGIS |
 | **ORM / geo-ORM** | SQLAlchemy 2.0, GeoAlchemy2 |
 | **API** | FastAPI |
-| **Data sources** | Multiple public-data OpenAPIs (19 connectors) |
+| **데이터소스** | 다수 공공데이터 OpenAPI (19개 커넥터) |
 
-## Scale
+## 규모
 
-| Metric | Value |
+| 지표 | 값 |
 |--------|-------|
-| Python source | ~12,353 LOC across 61 files |
-| ETL connectors | 19 public-data sources |
-| Geographic coverage | 250 municipalities, nationwide |
-| Analytical units | 3,523 administrative districts |
-| Composite axes | 4 (Demand, Competition, Accessibility, Cost-efficiency) |
-| Auxiliary indicators | 6 |
-| Team size | 1 (design + implementation) |
+| 파이썬 소스 | 61개 파일, 약 12,353 LOC |
+| ETL 커넥터 | 19개 공공데이터 소스 |
+| 지리적 커버리지 | 전국 250개 시군구 |
+| 분석 단위 | 3,523개 행정동 |
+| 종합 축 | 4개 (수요·경쟁·접근성·비용효율) |
+| 보조지표 | 6개 |
+| 개발 인원 | 1명 (설계 + 구현) |
 
-## Technical Highlights
+## 기술 하이라이트
 
-- **Textbook spatial methods, implemented correctly.** 2SFCA, E2SFCA with a Gaussian decay kernel, and the Huff gravity model are implemented to their published formulations — not approximated with ad-hoc distance buckets.
-- **Learned weights, not guessed weights.** The four-axis weighting is optimized against real outcome data, so the composite reflects what actually correlates with success.
-- **19 sources, one grid.** Nineteen incompatible public APIs standardized and spatially joined onto 3,523 districts nationwide.
-- **Geometry as a first-class citizen.** PostGIS + GeoAlchemy2 keep spatial relationships queryable end-to-end.
-- **Honest uncertainty engineering.** The model avoids circular logic, treats areas outside data coverage as *neutral* rather than fabricating a score, and explicitly flags low-confidence outputs.
+- **정통 공간 기법을 정확히 구현.** 2SFCA, 가우시안 감쇠 커널을 쓴 E2SFCA, Huff 중력모형을 논문의 정식 그대로 구현했습니다 — 임의의 거리 구간으로 근사하지 않았습니다.
+- **감이 아니라 학습된 가중치.** 4축 가중치를 실제 결과 데이터에 최적화해, 종합점수가 제 직관이 아니라 실제로 성공과 상관있는 것을 반영하도록 했습니다.
+- **19개 소스, 하나의 격자.** 호환되지 않는 19개 공공 API를 전국 3,523개 행정동으로 표준화·공간조인했습니다.
+- **지오메트리를 일급 시민으로.** PostGIS + GeoAlchemy2로 공간 관계를 끝까지 질의 가능하게 유지.
+- **정직한 불확실성 공학.** 순환논리를 배제하고, 데이터 커버리지 밖 지역은 점수를 지어내지 않고 *중립*으로 두며, 저신뢰 결과는 명시적으로 표시합니다.
 
-## Validation
+## 검증
 
-- **Weight optimization.** Four-axis weights selected by **grid search** against real outcome targets (observed openings / survival).
-- **Cross-validation.** Optimization ran under **5-fold cross-validation** to guard against overfitting.
-- **Parameter back-testing.** Spatial parameters — decay σ, catchment cutoff, normalization — chosen by back-testing, not defaulted.
-- **Rank-quality checks.** Output rankings audited with **Spearman rank correlation** against reference signals.
+- **가중치 최적화.** 4축 가중치를 실제 결과 지표(관측된 개업/생존)에 대해 **그리드서치**로 선정.
+- **교차검증.** 최적화를 **5-fold 교차검증** 아래에서 수행해 과적합을 방어.
+- **파라미터 백테스트.** 감쇠 σ, 도달권 컷오프, 정규화 방식 등 공간 파라미터를 기본값이 아니라 백테스트로 선정.
+- **랭킹 품질 점검.** 산출 랭킹을 참조 신호에 대해 **Spearman 순위상관**으로 감사.
 
-**Stated limits (honest by design):** districts outside a source's coverage are held neutral (never imputed); low-confidence outputs are labeled; the engine is decision *support* and does not claim to predict any individual store's success deterministically.
+**명시한 한계 (설계상 정직하게):** 소스 커버리지 밖 행정동은 중립으로 유지(추정 주입 안 함), 저신뢰 결과는 라벨링, 이 엔진은 의사결정 *지원* 도구이며 개별 점포의 성공을 결정론적으로 예측한다고 주장하지 않습니다.
 
-## My Role
+## 나의 역할
 
-Sole designer and engineer, end to end:
+처음부터 끝까지 단독 설계·구현했습니다:
 
-- The **spatial methodology** — selecting and correctly implementing 2SFCA / E2SFCA / Huff, and designing the four-axis composite.
-- The **data engineering** — all 19 ETL connectors, nationwide district normalization, CRS handling, and PostGIS/GeoAlchemy2 spatial persistence.
-- The **calibration science** — grid search, 5-fold cross-validation, and parameter back-testing.
-- The **honesty layer** — coverage handling, confidence labeling, and circular-logic prevention.
+- **공간 방법론** — 2SFCA / E2SFCA / Huff의 선정과 정확한 구현, 4축 종합점수 설계.
+- **데이터 엔지니어링** — 19개 ETL 커넥터 전부, 전국 행정동 정규화, 좌표계 처리, PostGIS/GeoAlchemy2 공간 저장.
+- **캘리브레이션 과학** — 그리드서치, 5-fold 교차검증, 파라미터 백테스트.
+- **정직성 계층** — 커버리지 처리, 신뢰도 라벨링, 순환논리 방지.
 
-One person, ~12,353 lines, 3,523 districts, from raw public APIs to a calibrated nationwide scoring engine.
+한 사람, 약 12,353줄, 3,523개 행정동 — 원시 공공 API부터 보정된 전국 점수화 엔진까지.
