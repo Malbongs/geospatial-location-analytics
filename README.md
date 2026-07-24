@@ -1,4 +1,4 @@
-# Geospatial Location Intelligence Engine
+# 공간분석 입지 인텔리전스 엔진
 
 **Nationwide demand–supply location analysis for retail siting — built with spatial statistics, from data pipeline to scoring engine.**
 
